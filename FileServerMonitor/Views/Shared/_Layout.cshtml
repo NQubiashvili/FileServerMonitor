@@ -1,0 +1,193 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>@ViewData["Title"] - FileServerMonitor</title>
+    <link rel="stylesheet" href="~/lib/bootstrap/dist/css/bootstrap.min.css" />
+    <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .table-cell { padding: 0.75rem; vertical-align: top; border-bottom: 1px solid #e5e7eb; font-size: 0.875rem; }
+        .action-chip { padding: 0.25rem 0.75rem; border-radius: 9999px; font-size: 0.75rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em; }
+        .action-created { background-color: #dcfce7; color: #166534; }
+        .action-deleted { background-color: #fee2e2; color: #991b1b; }
+        .action-modified { background-color: #fef3c7; color: #92400e; }
+        .action-renamed { background-color: #dbeafe; color: #1e40af; }
+        #searchInput { padding: 0.5rem 1rem; border: 1px solid #ccc; border-radius: 0.5rem; width: 100%; max-width: 400px; margin-bottom: 1rem; }
+    </style>
+</head>
+<body>
+    <header>
+        <nav class="navbar navbar-expand-sm navbar-toggleable-sm navbar-light bg-white border-bottom box-shadow mb-3">
+            <div class="container-fluid">
+                <a class="navbar-brand" asp-area="" asp-controller="Home" asp-action="Index">FileServerMonitor</a>
+                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target=".navbar-collapse">
+                    <span class="navbar-toggler-icon"></span>
+                </button>
+                <div class="navbar-collapse collapse d-sm-inline-flex justify-content-between">
+                    <ul class="navbar-nav flex-grow-1">
+                        <li class="nav-item">
+                            <a class="nav-link text-dark" asp-area="" asp-controller="Home" asp-action="Index">Home</a>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+        </nav>
+    </header>
+
+    <div class="container mt-4">
+        <h1 class="mb-3">Shared Folder Activity Log</h1>
+
+        <div id="error-message" class="alert alert-danger d-none" role="alert">
+            <strong>Connection Error!</strong>
+            <span id="error-text"></span>
+        </div>
+
+        <input type="text" id="searchInput" class="form-control mb-3" placeholder="Search logs...">
+
+        <div class="table-responsive bg-white rounded shadow-sm">
+            <table class="table table-sm table-striped">
+                <thead class="table-light">
+                    <tr>
+                        <th class="table-cell">Timestamp</th>
+                        <th class="table-cell">Action</th>
+                        <th class="table-cell">Path Details</th>
+                        <th class="table-cell">PC Name</th>
+                        <th class="table-cell">IP</th>
+                        <th class="table-cell">User</th>
+                    </tr>
+                </thead>
+                <tbody id="log-table-body"></tbody>
+            </table>
+            <div id="loading" class="text-center p-4 text-muted">Loading logs...</div>
+        </div>
+
+        <div id="pagination" class="d-flex justify-content-center mt-3 flex-wrap"></div>
+    </div>
+
+    <footer class="border-top footer text-muted mt-4">
+        <div class="container">&copy; 2025 - FileServerMonitor</div>
+    </footer>
+
+    <script src="~/lib/jquery/dist/jquery.min.js"></script>
+    <script src="~/lib/bootstrap/dist/js/bootstrap.bundle.min.js"></script>
+
+    <script>
+        const apiUrl = '/api/logs';
+        const logsPerPage = 20;
+        let allLogs = [];
+        let filteredLogs = [];
+        let currentPage = 1;
+
+        const logTableBody = document.getElementById('log-table-body');
+        const searchInput = document.getElementById('searchInput');
+        const paginationDiv = document.getElementById('pagination');
+        const loadingDiv = document.getElementById('loading');
+        const errorMessageDiv = document.getElementById('error-message');
+        const errorTextSpan = document.getElementById('error-text');
+
+        function getActionChip(action) {
+            const a = action.toLowerCase();
+            let cls = 'bg-secondary text-white';
+            if (a === 'created') cls = 'action-created';
+            else if (a === 'deleted') cls = 'action-deleted';
+            else if (a === 'changed' || a === 'modified') cls = 'action-modified';
+            else if (a === 'renamed' || a === 'moved') cls = 'action-renamed';
+            return `<span class="action-chip ${cls}">${action}</span>`;
+        }
+
+        function renderTablePage(page) {
+            logTableBody.innerHTML = '';
+            const start = (page - 1) * logsPerPage;
+            const end = start + logsPerPage;
+            const pageLogs = filteredLogs.slice(start, end);
+
+            if (!pageLogs.length) {
+                loadingDiv.textContent = 'No logs found.';
+                loadingDiv.classList.remove('d-none');
+            } else {
+                loadingDiv.classList.add('d-none');
+                pageLogs.forEach(log => {
+                    let pathDetails = `<div class="font-mono">${log.fullPath}</div>`;
+                    if ((log.action.toLowerCase() === 'renamed' || log.action.toLowerCase() === 'moved') && log.oldFullPath)
+                        pathDetails = `<div><small>From:</small> <div class="font-mono">${log.oldFullPath}</div><small>To:</small> <div class="font-mono text-primary">${log.fullPath}</div></div>`;
+
+                    const row = `<tr>
+                        <td class="table-cell">${log.timestamp}</td>
+                        <td class="table-cell">${getActionChip(log.action)}</td>
+                        <td class="table-cell">${pathDetails}</td>
+                        <td class="table-cell">${log.pcName || '-'}</td>
+                        <td class="table-cell">${log.ipAddress || '-'}</td>
+                        <td class="table-cell">${log.userName || '-'}</td>
+                    </tr>`;
+                    logTableBody.insertAdjacentHTML('beforeend', row);
+                });
+            }
+            renderPagination();
+        }
+
+        function renderPagination() {
+            paginationDiv.innerHTML = '';
+            const totalPages = Math.ceil(filteredLogs.length / logsPerPage);
+            if (totalPages <= 1) return;
+
+            const createBtn = (text, active = false, onclick = null) => {
+                const btn = document.createElement('button');
+                btn.textContent = text;
+                btn.className = `btn btn-sm mx-1 ${active ? 'btn-primary' : 'btn-outline-secondary'}`;
+                if (onclick) btn.onclick = onclick;
+                return btn;
+            };
+
+            if (currentPage > 1)
+                paginationDiv.appendChild(createBtn('Prev', false, () => { currentPage--; renderTablePage(currentPage); }));
+
+            for (let i = 1; i <= totalPages; i++) {
+                paginationDiv.appendChild(createBtn(i, i === currentPage, () => { currentPage = i; renderTablePage(currentPage); }));
+            }
+
+            if (currentPage < totalPages)
+                paginationDiv.appendChild(createBtn('Next', false, () => { currentPage++; renderTablePage(currentPage); }));
+        }
+
+        function applySearchFilter() {
+            const q = searchInput.value.toLowerCase();
+            filteredLogs = allLogs.filter(l =>
+                l.timestamp.toLowerCase().includes(q) ||
+                l.action.toLowerCase().includes(q) ||
+                l.fullPath.toLowerCase().includes(q) ||
+                (l.oldFullPath && l.oldFullPath.toLowerCase().includes(q)) ||
+                (l.pcName && l.pcName.toLowerCase().includes(q)) ||
+                (l.ipAddress && l.ipAddress.toLowerCase().includes(q)) ||
+                (l.userName && l.userName.toLowerCase().includes(q))
+            );
+            currentPage = 1;
+            renderTablePage(currentPage);
+        }
+
+        searchInput.addEventListener('input', applySearchFilter);
+
+        async function fetchLogs() {
+            errorMessageDiv.classList.add('d-none');
+            loadingDiv.textContent = 'Loading logs...';
+            loadingDiv.classList.remove('d-none');
+
+            try {
+                const res = await fetch(apiUrl);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                allLogs = await res.json();
+                filteredLogs = allLogs;
+                currentPage = 1;
+                renderTablePage(currentPage);
+            } catch (err) {
+                errorTextSpan.textContent = err.message;
+                errorMessageDiv.classList.remove('d-none');
+            }
+        }
+
+        fetchLogs();
+        setInterval(fetchLogs, 30000);
+    </script>
+</body>
+</html>
